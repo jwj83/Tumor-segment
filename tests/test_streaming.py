@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import tempfile
 import unittest
 from pathlib import Path
@@ -7,15 +8,92 @@ from unittest.mock import patch
 
 import nibabel as nib
 import numpy as np
+from openpyxl import Workbook
 
 from core.config import Settings
-from core.exceptions import OutputValidationError
+from core.exceptions import InvalidInputError, OutputValidationError
 from core.runner import EvaluationJob, EvaluationRunner
 from data.loader import DatasetLoader
 from output.validator import OutputValidator
 
 
 class StreamingTest(unittest.TestCase):
+    def test_loader_deduplicates_numbered_nifti_copies(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "dataset"
+            nested = root / "ACC001" / "SERIES-A"
+            direct = root / "ACC002"
+            nested.mkdir(parents=True)
+            direct.mkdir(parents=True)
+
+            self._save_image(nested / "SERIES-A.nii.gz", 0)
+            self._save_image(nested / "SERIES-A(1).nii.gz", 1)
+            self._save_image(direct / "SERIES-B(1).nii", 1)
+            self._save_image(direct / "SERIES-B(2).nii", 2)
+            (direct / "SERIES-B.json").write_text(
+                json.dumps({"ProtocolName": "from-base-sidecar"}),
+                encoding="utf-8",
+            )
+
+            studies = tuple(DatasetLoader().iter_studies(root))
+
+            self.assertEqual(2, len(studies))
+            self.assertEqual("SERIES-A.nii.gz", studies[0].series[0].source_path.name)
+            self.assertEqual("SERIES-A", studies[0].series[0].series_uid)
+            self.assertEqual("SERIES-B(1).nii", studies[1].series[0].source_path.name)
+            self.assertEqual("SERIES-B", studies[1].series[0].series_uid)
+            self.assertEqual("from-base-sidecar", studies[1].series[0].modality)
+            del studies
+
+    def test_loader_keeps_unrelated_files_in_the_same_series_directory(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "dataset"
+            directory = root / "ACC001" / "SERIES"
+            directory.mkdir(parents=True)
+            self._save_image(directory / "first.nii", 1)
+            self._save_image(directory / "second.nii", 2)
+
+            with self.assertRaisesRegex(ValueError, "duplicate series UIDs"):
+                tuple(DatasetLoader().iter_studies(root))
+
+    def test_loader_uses_xlsx_series_type_without_replacing_uid(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "dataset"
+            for series_uid in ("SERIES-A", "SERIES-B"):
+                directory = root / "ACC001" / series_uid
+                directory.mkdir(parents=True)
+                self._save_image(directory / f"{series_uid}.nii.gz", 0)
+
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.append(["AccessionNumber", "SeriesUid", "SeriesType"])
+            sheet.append(["a cc001", "series- a", "T1CE (增强)"])
+            workbook.save(root / "SeriesType.xlsx")
+
+            study = next(DatasetLoader().iter_studies(root))
+            by_uid = {series.series_uid: series for series in study.series}
+
+            self.assertEqual("T1CE (增强)", by_uid["SERIES-A"].modality)
+            self.assertEqual("SERIES-A", by_uid["SERIES-A"].series_uid)
+            self.assertEqual("SERIES-B", by_uid["SERIES-B"].modality)
+
+    def test_loader_rejects_conflicting_xlsx_series_types(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "dataset"
+            directory = root / "ACC001" / "SERIES-A"
+            directory.mkdir(parents=True)
+            self._save_image(directory / "SERIES-A.nii.gz", 0)
+
+            workbook = Workbook()
+            sheet = workbook.active
+            sheet.append(["AccessionNumber", "SeriesUid", "SeriesType"])
+            sheet.append(["ACC001", "SERIES-A", "T1"])
+            sheet.append(["A CC001", "SERIES- A", "T2"])
+            workbook.save(root / "SeriesType.xlsx")
+
+            with self.assertRaisesRegex(InvalidInputError, "conflicting SeriesType"):
+                next(DatasetLoader().iter_studies(root))
+
     def test_loader_reads_only_the_current_study(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             dataset_path = Path(temporary) / "dataset"
@@ -88,6 +166,34 @@ class StreamingTest(unittest.TestCase):
             self.assertFalse((settings.answer_root / "evaluation-fail").exists())
             self.assertEqual([], list(settings.answer_root.glob(".*.tmp-*")))
 
+    def test_loader_failure_does_not_log_the_previous_accession(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            dataset_path = root / "dataset"
+            self._make_dataset(dataset_path)
+
+            class FailingAfterFirstLoader(DatasetLoader):
+                def iter_studies(self, path: str | Path):
+                    studies = super().iter_studies(path)
+                    yield next(studies)
+                    raise InvalidInputError("cannot load next study")
+
+            settings = self._settings(root)
+            runner = EvaluationRunner(settings, loader=FailingAfterFirstLoader())
+            with self.assertRaisesRegex(InvalidInputError, "next study"):
+                runner.run(
+                    EvaluationJob("request-log", "evaluation-log", dataset_path),
+                    send_callback=False,
+                )
+
+            records = [
+                json.loads(line)
+                for line in (settings.log_root / "inference.jsonl")
+                .read_text(encoding="utf-8")
+                .splitlines()
+            ]
+            self.assertIsNone(records[-1]["accession_number"])
+
     @staticmethod
     def _settings(root: Path) -> Settings:
         return Settings(
@@ -110,6 +216,16 @@ class StreamingTest(unittest.TestCase):
                     ),
                     str(directory / f"{series_uid}.nii.gz"),
                 )
+
+    @staticmethod
+    def _save_image(path: Path, value: float) -> None:
+        nib.save(
+            nib.Nifti1Image(
+                np.full((2, 3, 4), value, dtype=np.float32),
+                np.eye(4),
+            ),
+            str(path),
+        )
 
 
 if __name__ == "__main__":

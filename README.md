@@ -231,6 +231,8 @@ export COMPETITION_PIPELINE_FACTORY='tasks.real_pipeline:build_pipeline'
 ## 当前规范解释
 
 - 官方输入仅支持 NIfTI（.nii/.nii.gz）；
+- 数据根目录可提供标准 `SeriesType.xlsx`，Loader 按 `AccessionNumber` 和 `SeriesUid` 匹配后使用 `SeriesType` 补充序列类型；缺少文件或匹配行时沿用原有元数据；
+- 同目录下名称仅多出 `(数字)` 的 NIfTI 文件按副本处理，优先无编号原文件，否则使用编号最小的副本；
 - 核心区写入其来源 T1 增强 Series UID 目录；周围区写入其 Flair/T2 Series UID 目录；
 - `SegmentationMaskURI` 相对于病例目录，格式为 `./{SeriesUid}/{SeriesUid}.nii.gz`；
 - 所有病例均输出 `IsNotHumanBodyProb` 和 `IsStitchedProb`；

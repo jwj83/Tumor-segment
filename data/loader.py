@@ -8,6 +8,7 @@ from typing import Any, Iterable, Iterator
 
 import nibabel as nib
 import numpy as np
+from openpyxl import load_workbook
 
 from core.exceptions import InvalidInputError
 from data.structures import CompetitionDataset, Series, Study
@@ -15,10 +16,44 @@ from data.structures import CompetitionDataset, Series, Study
 
 _NIFTI_SUFFIXES = (".nii", ".nii.gz")
 _MASK_HINTS = ("mask", "seg", "label", "roi")
+_NIFTI_COPY_PATTERN = re.compile(r"^(?P<stem>.+?)\s*\((?P<copy>\d+)\)$")
+_SERIES_TYPE_HEADERS = ("accessionnumber", "seriesuid", "seriestype")
 
 
 def _nifti_stem(path: Path) -> str:
     return path.name[:-7] if path.name.lower().endswith(".nii.gz") else path.stem
+
+
+def _nifti_copy_parts(path: Path) -> tuple[str, int | None]:
+    stem = _nifti_stem(path)
+    match = _NIFTI_COPY_PATTERN.fullmatch(stem)
+    if match is None:
+        return stem, None
+    return match.group("stem"), int(match.group("copy"))
+
+
+def _nifti_suffix(path: Path) -> str:
+    return ".nii.gz" if path.name.lower().endswith(".nii.gz") else ".nii"
+
+
+def _deduplicate_nifti_copies(files: Iterable[Path]) -> list[Path]:
+    grouped: dict[tuple[Path, str, str], list[tuple[int | None, Path]]] = defaultdict(list)
+    for path in files:
+        stem, copy = _nifti_copy_parts(path)
+        grouped[(path.parent, stem, _nifti_suffix(path))].append((copy, path))
+
+    selected = [
+        min(
+            candidates,
+            key=lambda item: (
+                item[0] is not None,
+                item[0] or 0,
+                item[1].name.casefold(),
+            ),
+        )[1]
+        for candidates in grouped.values()
+    ]
+    return sorted(selected)
 
 
 def _clean_identifier(value: Any, fallback: str) -> str:
@@ -26,6 +61,96 @@ def _clean_identifier(value: Any, fallback: str) -> str:
     if not text:
         text = fallback
     return re.sub(r"[\\/\x00-\x1f]", "_", text)
+
+
+def _metadata_key(value: Any) -> str:
+    return re.sub(r"\s+", "", str(value if value is not None else "")).casefold()
+
+
+def _read_series_types(root: Path) -> dict[tuple[str, str], str]:
+    path = root / "SeriesType.xlsx"
+    if not path.is_file():
+        return {}
+
+    try:
+        workbook = load_workbook(path, read_only=True, data_only=True)
+    except Exception as exc:
+        raise InvalidInputError(
+            f"cannot read series metadata {path}: {type(exc).__name__}: {exc}"
+        ) from exc
+
+    try:
+        header: tuple[Any, int, dict[str, int]] | None = None
+        for worksheet in workbook.worksheets:
+            for row_number, row in enumerate(
+                worksheet.iter_rows(values_only=True),
+                start=1,
+            ):
+                cells = [_metadata_key(value) for value in row]
+                if all(name in cells for name in _SERIES_TYPE_HEADERS):
+                    header = (
+                        worksheet,
+                        row_number,
+                        {name: cells.index(name) for name in _SERIES_TYPE_HEADERS},
+                    )
+                    break
+            if header is not None:
+                break
+
+        if header is None:
+            raise InvalidInputError(
+                f"series metadata {path} is missing headers: "
+                "AccessionNumber, SeriesUid, SeriesType"
+            )
+
+        worksheet, header_row, columns = header
+        series_types: dict[tuple[str, str], str] = {}
+        for row_number, row in enumerate(
+            worksheet.iter_rows(min_row=header_row + 1, values_only=True),
+            start=header_row + 1,
+        ):
+            values = {
+                name: row[index] if index < len(row) else None
+                for name, index in columns.items()
+            }
+            if all(
+                not str(value if value is not None else "").strip()
+                for value in values.values()
+            ):
+                continue
+            missing = [
+                name
+                for name, value in values.items()
+                if not str(value if value is not None else "").strip()
+            ]
+            if missing:
+                raise InvalidInputError(
+                    f"series metadata {path} sheet={worksheet.title!r} "
+                    f"row={row_number} is missing {', '.join(missing)}"
+                )
+
+            key = (
+                _metadata_key(values["accessionnumber"]),
+                _metadata_key(values["seriesuid"]),
+            )
+            series_type = str(values["seriestype"]).strip()
+            previous = series_types.get(key)
+            if previous is not None and previous != series_type:
+                raise InvalidInputError(
+                    f"series metadata {path} has conflicting SeriesType values "
+                    f"for accession={values['accessionnumber']!r} "
+                    f"series={values['seriesuid']!r}: {previous!r}, {series_type!r}"
+                )
+            series_types[key] = series_type
+        return series_types
+    except InvalidInputError:
+        raise
+    except Exception as exc:
+        raise InvalidInputError(
+            f"cannot read series metadata {path}: {type(exc).__name__}: {exc}"
+        ) from exc
+    finally:
+        workbook.close()
 
 
 class DatasetLoader:
@@ -46,7 +171,7 @@ class DatasetLoader:
         if not root.is_dir():
             raise InvalidInputError(f"dataset_path is not a directory: {root}")
 
-        nifti_files = sorted(
+        nifti_files = _deduplicate_nifti_copies(
             path
             for path in root.rglob("*")
             if path.is_file()
@@ -55,12 +180,13 @@ class DatasetLoader:
         )
         if not nifti_files:
             raise InvalidInputError(f"no readable NIfTI images under {root}")
-        yield from self._iter_nifti(root, nifti_files)
+        yield from self._iter_nifti(root, nifti_files, _read_series_types(root))
 
     def _iter_nifti(
         self,
         root: Path,
         files: Iterable[Path],
+        series_types: dict[tuple[str, str], str],
     ) -> Iterator[Study]:
         grouped: dict[str, list[Path]] = defaultdict(list)
         for path in files:
@@ -72,7 +198,13 @@ class DatasetLoader:
             yield Study(
                 accession_number=accession,
                 series=tuple(
-                    self._read_nifti_series(root, accession, path) for path in paths
+                    self._read_nifti_series(
+                        root,
+                        accession,
+                        path,
+                        series_types,
+                    )
+                    for path in paths
                 ),
             )
 
@@ -81,13 +213,17 @@ class DatasetLoader:
         root: Path,
         accession: str,
         path: Path,
+        series_types: dict[tuple[str, str], str],
     ) -> Series:
         relative = path.relative_to(root)
+        file_stem, copy = _nifti_copy_parts(path)
         if len(relative.parts) == 1 or path.parent == root / relative.parts[0]:
-            series_uid = _nifti_stem(path)
+            series_uid = file_stem
         else:
             series_uid = path.parent.name
         sidecar = path.with_name(_nifti_stem(path) + ".json")
+        if copy is not None and not sidecar.is_file():
+            sidecar = path.with_name(file_stem + ".json")
         try:
             metadata: dict[str, Any] = {}
             if sidecar.is_file():
@@ -104,7 +240,8 @@ class DatasetLoader:
                 series_uid,
             )
             description = str(
-                metadata.get("SeriesDescription")
+                series_types.get((_metadata_key(accession), _metadata_key(uid)))
+                or metadata.get("SeriesDescription")
                 or metadata.get("ProtocolName")
                 or series_uid
             )

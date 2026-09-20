@@ -85,8 +85,8 @@ class EvaluationRunner:
                 self.validator.validate_study(accession_dir, study)
                 accessions.add(current_accession)
                 del context, study
+                current_accession = None
 
-            current_accession = None
             duplicates = self.pipeline.finalize_dataset_task()
             duplicate_path = self.writer.write_duplicates(
                 staging,
