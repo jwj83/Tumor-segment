@@ -18,34 +18,28 @@ from output.validator import OutputValidator
 
 
 class StreamingTest(unittest.TestCase):
-    def test_loader_deduplicates_numbered_nifti_copies(self) -> None:
+    def test_loader_selects_exact_original_in_series_directory(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "dataset"
-            nested = root / "ACC001" / "SERIES-A"
-            direct = root / "ACC002"
-            nested.mkdir(parents=True)
-            direct.mkdir(parents=True)
+            directory = root / "ACC001" / "SERIES-A"
+            directory.mkdir(parents=True)
 
-            self._save_image(nested / "SERIES-A.nii.gz", 0)
-            self._save_image(nested / "SERIES-A(1).nii.gz", 1)
-            self._save_image(direct / "SERIES-B(1).nii", 1)
-            self._save_image(direct / "SERIES-B(2).nii", 2)
-            (direct / "SERIES-B.json").write_text(
-                json.dumps({"ProtocolName": "from-base-sidecar"}),
+            self._save_image(directory / "SERIES-A.nii.gz", 0)
+            self._save_image(directory / "SERIES-A(1).nii.gz", 1)
+            self._save_image(directory / "SERIES-A(2)(1).nii.gz", 2)
+            (directory / "SERIES-A.json").write_text(
+                json.dumps({"ProtocolName": "from-original-sidecar"}),
                 encoding="utf-8",
             )
 
-            studies = tuple(DatasetLoader().iter_studies(root))
+            study = next(DatasetLoader().iter_studies(root))
 
-            self.assertEqual(2, len(studies))
-            self.assertEqual("SERIES-A.nii.gz", studies[0].series[0].source_path.name)
-            self.assertEqual("SERIES-A", studies[0].series[0].series_uid)
-            self.assertEqual("SERIES-B(1).nii", studies[1].series[0].source_path.name)
-            self.assertEqual("SERIES-B", studies[1].series[0].series_uid)
-            self.assertEqual("from-base-sidecar", studies[1].series[0].modality)
-            del studies
+            self.assertEqual(1, len(study.series))
+            self.assertEqual("SERIES-A.nii.gz", study.series[0].source_path.name)
+            self.assertEqual("SERIES-A", study.series[0].series_uid)
+            self.assertEqual("from-original-sidecar", study.series[0].modality)
 
-    def test_loader_keeps_unrelated_files_in_the_same_series_directory(self) -> None:
+    def test_loader_rejects_multiple_files_without_exact_original(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary) / "dataset"
             directory = root / "ACC001" / "SERIES"
@@ -53,7 +47,7 @@ class StreamingTest(unittest.TestCase):
             self._save_image(directory / "first.nii", 1)
             self._save_image(directory / "second.nii", 2)
 
-            with self.assertRaisesRegex(ValueError, "duplicate series UIDs"):
+            with self.assertRaisesRegex(InvalidInputError, "exactly one original"):
                 tuple(DatasetLoader().iter_studies(root))
 
     def test_loader_uses_xlsx_series_type_without_replacing_uid(self) -> None:

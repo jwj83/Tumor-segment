@@ -16,7 +16,6 @@ from data.structures import CompetitionDataset, Series, Study
 
 _NIFTI_SUFFIXES = (".nii", ".nii.gz")
 _MASK_HINTS = ("mask", "seg", "label", "roi")
-_NIFTI_COPY_PATTERN = re.compile(r"^(?P<stem>.+?)\s*\((?P<copy>\d+)\)$")
 _SERIES_TYPE_HEADERS = ("accessionnumber", "seriesuid", "seriestype")
 
 
@@ -24,35 +23,27 @@ def _nifti_stem(path: Path) -> str:
     return path.name[:-7] if path.name.lower().endswith(".nii.gz") else path.stem
 
 
-def _nifti_copy_parts(path: Path) -> tuple[str, int | None]:
-    stem = _nifti_stem(path)
-    match = _NIFTI_COPY_PATTERN.fullmatch(stem)
-    if match is None:
-        return stem, None
-    return match.group("stem"), int(match.group("copy"))
-
-
-def _nifti_suffix(path: Path) -> str:
-    return ".nii.gz" if path.name.lower().endswith(".nii.gz") else ".nii"
-
-
-def _deduplicate_nifti_copies(files: Iterable[Path]) -> list[Path]:
-    grouped: dict[tuple[Path, str, str], list[tuple[int | None, Path]]] = defaultdict(list)
+def _select_original_nifti_files(root: Path, files: Iterable[Path]) -> list[Path]:
+    selected: list[Path] = []
+    grouped: dict[Path, list[Path]] = defaultdict(list)
     for path in files:
-        stem, copy = _nifti_copy_parts(path)
-        grouped[(path.parent, stem, _nifti_suffix(path))].append((copy, path))
+        if len(path.relative_to(root).parts) <= 2:
+            selected.append(path)
+        else:
+            grouped[path.parent].append(path)
 
-    selected = [
-        min(
-            candidates,
-            key=lambda item: (
-                item[0] is not None,
-                item[0] or 0,
-                item[1].name.casefold(),
-            ),
-        )[1]
-        for candidates in grouped.values()
-    ]
+    for directory, paths in grouped.items():
+        if len(paths) == 1:
+            selected.extend(paths)
+            continue
+        originals = [path for path in paths if _nifti_stem(path) == directory.name]
+        if len(originals) != 1:
+            raise InvalidInputError(
+                f"series directory {directory} has multiple NIfTI files but "
+                f"expected exactly one original named {directory.name}.nii or "
+                f"{directory.name}.nii.gz: {[path.name for path in sorted(paths)]}"
+            )
+        selected.extend(originals)
     return sorted(selected)
 
 
@@ -171,12 +162,15 @@ class DatasetLoader:
         if not root.is_dir():
             raise InvalidInputError(f"dataset_path is not a directory: {root}")
 
-        nifti_files = _deduplicate_nifti_copies(
-            path
-            for path in root.rglob("*")
-            if path.is_file()
-            and path.name.lower().endswith(_NIFTI_SUFFIXES)
-            and not any(hint in path.name.lower() for hint in _MASK_HINTS)
+        nifti_files = _select_original_nifti_files(
+            root,
+            (
+                path
+                for path in root.rglob("*")
+                if path.is_file()
+                and path.name.lower().endswith(_NIFTI_SUFFIXES)
+                and not any(hint in path.name.lower() for hint in _MASK_HINTS)
+            ),
         )
         if not nifti_files:
             raise InvalidInputError(f"no readable NIfTI images under {root}")
@@ -216,14 +210,11 @@ class DatasetLoader:
         series_types: dict[tuple[str, str], str],
     ) -> Series:
         relative = path.relative_to(root)
-        file_stem, copy = _nifti_copy_parts(path)
         if len(relative.parts) == 1 or path.parent == root / relative.parts[0]:
-            series_uid = file_stem
+            series_uid = _nifti_stem(path)
         else:
             series_uid = path.parent.name
         sidecar = path.with_name(_nifti_stem(path) + ".json")
-        if copy is not None and not sidecar.is_file():
-            sidecar = path.with_name(file_stem + ".json")
         try:
             metadata: dict[str, Any] = {}
             if sidecar.is_file():
