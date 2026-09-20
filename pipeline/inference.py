@@ -5,7 +5,7 @@ import time
 from dataclasses import dataclass
 
 from core.exceptions import InvalidTaskResultError
-from data.structures import CompetitionDataset
+from data.structures import CompetitionDataset, Study
 from pipeline.context import PipelineContext
 from tasks.base import DatasetTask, StudyTask
 from tasks.dummy.dataset_tasks import DummyDuplicateTask
@@ -47,20 +47,40 @@ class InferencePipeline:
         self,
         dataset: CompetitionDataset,
     ) -> tuple[dict[str, PipelineContext], DuplicateResult]:
+        self.reset_dataset_task()
         contexts: dict[str, PipelineContext] = {}
         for study in dataset.studies:
-            started = time.perf_counter()
-            context = PipelineContext(study=study)
-            for binding in self.study_tasks:
-                result = binding.task.predict(context)
-                self._validate_result_numbers(result, binding.task.name)
-                setattr(context, binding.context_field, result)
-            context.processing_time_ms = round((time.perf_counter() - started) * 1000)
+            context = self.run_study(study)
             contexts[study.accession_number] = context
+            self.update_dataset_task(study, context)
 
-        duplicates = self.duplicate_task.predict(dataset, contexts)
-        self._validate_result_numbers(duplicates, self.duplicate_task.name)
+        duplicates = self.finalize_dataset_task()
         return contexts, duplicates
+
+    def run_study(self, study: Study) -> PipelineContext:
+        started = time.perf_counter()
+        context = PipelineContext(study=study)
+        for binding in self.study_tasks:
+            result = binding.task.predict(context)
+            self._validate_result_numbers(result, binding.task.name)
+            setattr(context, binding.context_field, result)
+        context.processing_time_ms = round((time.perf_counter() - started) * 1000)
+        return context
+
+    def reset_dataset_task(self) -> None:
+        self.duplicate_task.reset()
+
+    def update_dataset_task(
+        self,
+        study: Study,
+        context: PipelineContext,
+    ) -> None:
+        self.duplicate_task.update(study, context)
+
+    def finalize_dataset_task(self) -> DuplicateResult:
+        duplicates = self.duplicate_task.finalize()
+        self._validate_result_numbers(duplicates, self.duplicate_task.name)
+        return duplicates
 
     @classmethod
     def _validate_result_numbers(cls, value: object, task_name: str) -> None:

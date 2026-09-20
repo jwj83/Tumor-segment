@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import uuid
 from pathlib import Path
 
@@ -30,6 +31,18 @@ class OutputWriter:
         contexts: dict[str, PipelineContext],
         duplicates: DuplicateResult,
     ) -> Path:
+        """Compatibility wrapper for callers that already hold every context."""
+        staging = self.begin(evaluation_id)
+        try:
+            for _, context in sorted(contexts.items()):
+                self.write_study(staging, context)
+            self.write_duplicates(staging, set(contexts), duplicates)
+        except Exception:
+            shutil.rmtree(staging, ignore_errors=True)
+            raise
+        return staging
+
+    def begin(self, evaluation_id: str) -> Path:
         safe_evaluation_id = _safe_component(evaluation_id, "evaluation_id")
         self.answer_root.mkdir(parents=True, exist_ok=True)
         final_dir = self.answer_root / safe_evaluation_id
@@ -38,16 +51,62 @@ class OutputWriter:
 
         staging = self.answer_root / f".{safe_evaluation_id}.tmp-{uuid.uuid4().hex}"
         staging.mkdir()
-        self._write_duplicate_pairs(staging, contexts, duplicates)
-        for accession, context in sorted(contexts.items()):
-            accession_dir = staging / _safe_component(accession, "accession_number")
-            accession_dir.mkdir()
-            self._write_masks(accession_dir, context)
-            self._write_json(
-                accession_dir / "prediction.json",
-                self.aggregator.build(context),
-            )
         return staging
+
+    def write_study(self, staging: Path, context: PipelineContext) -> Path:
+        accession_dir = staging / _safe_component(
+            context.study.accession_number,
+            "accession_number",
+        )
+        accession_dir.mkdir()
+        self._write_masks(accession_dir, context)
+        self._write_json(
+            accession_dir / "prediction.json",
+            self.aggregator.build(context),
+        )
+        return accession_dir
+
+    def write_duplicates(
+        self,
+        staging: Path,
+        accessions: set[str],
+        duplicates: DuplicateResult,
+    ) -> Path:
+        pairs = self._normalize_pairs(duplicates.pairs)
+        if not pairs:
+            ordered_accessions = sorted(accessions)
+            if len(ordered_accessions) < 2:
+                raise ValueError(
+                    "duplicate_pairs.jsonl requires at least two studies for one valid pair"
+                )
+            pairs = [
+                DuplicatePair(
+                    ordered_accessions[0],
+                    ordered_accessions[1],
+                    0.0,
+                )
+            ]
+
+        path = staging / "duplicate_pairs.jsonl"
+        with path.open("w", encoding="utf-8", newline="\n") as handle:
+            for pair in pairs:
+                line = {
+                    "StudyUID": pair.left_accession,
+                    "StudyUID_dup": pair.right_accession,
+                    "PairProb": pair.probability,
+                }
+                handle.write(
+                    json.dumps(
+                        line,
+                        ensure_ascii=False,
+                        allow_nan=False,
+                        separators=(",", ":"),
+                    )
+                    + "\n"
+                )
+            handle.flush()
+            os.fsync(handle.fileno())
+        return path
 
     def publish(self, staging: Path, evaluation_id: str) -> Path:
         final_dir = self.answer_root / _safe_component(evaluation_id, "evaluation_id")
@@ -83,36 +142,6 @@ class OutputWriter:
             )
             image.set_data_dtype(np.uint8)
             nib.save(image, str(path))
-
-    def _write_duplicate_pairs(
-        self,
-        staging: Path,
-        contexts: dict[str, PipelineContext],
-        duplicates: DuplicateResult,
-    ) -> None:
-        pairs = self._normalize_pairs(duplicates.pairs)
-        if not pairs:
-            accessions = sorted(contexts)
-            if len(accessions) < 2:
-                raise ValueError(
-                    "duplicate_pairs.jsonl requires at least two studies for one valid pair"
-                )
-            pairs = [DuplicatePair(accessions[0], accessions[1], 0.0)]
-
-        path = staging / "duplicate_pairs.jsonl"
-        with path.open("w", encoding="utf-8", newline="\n") as handle:
-            for pair in pairs:
-                line = {
-                    "StudyUID": pair.left_accession,
-                    "StudyUID_dup": pair.right_accession,
-                    "PairProb": pair.probability,
-                }
-                handle.write(
-                    json.dumps(line, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
-                    + "\n"
-                )
-            handle.flush()
-            os.fsync(handle.fileno())
 
     @staticmethod
     def _normalize_pairs(pairs: tuple[DuplicatePair, ...]) -> list[DuplicatePair]:

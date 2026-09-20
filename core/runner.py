@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import shutil
+import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
@@ -43,8 +44,20 @@ class EvaluationRunner:
             settings.callback_attempts,
         )
         self.logger = CompetitionLogger(settings.log_root)
+        self._run_lock = threading.Lock()
 
     def run(self, job: EvaluationJob, *, send_callback: bool = True) -> Path:
+        # DatasetTask has one mutable incremental state, so evaluations sharing
+        # this runner must not interleave even if the job executor has workers.
+        with self._run_lock:
+            return self._run_streaming(job, send_callback=send_callback)
+
+    def _run_streaming(
+        self,
+        job: EvaluationJob,
+        *,
+        send_callback: bool,
+    ) -> Path:
         started = time.perf_counter()
         data_source = str(job.dataset_path)
         self.logger.write(
@@ -55,15 +68,33 @@ class EvaluationRunner:
             data_source=data_source,
         )
         staging: Path | None = None
+        current_accession: str | None = None
         try:
-            dataset = self.loader.load(job.dataset_path)
-            contexts, duplicates = self.pipeline.run(dataset)
-            staging = self.writer.write_staging(
-                job.evaluation_id,
-                contexts,
+            staging = self.writer.begin(job.evaluation_id)
+            accessions: set[str] = set()
+            self.pipeline.reset_dataset_task()
+            for study in self.loader.iter_studies(job.dataset_path):
+                current_accession = study.accession_number
+                if current_accession in accessions:
+                    raise ValueError(
+                        f"dataset has duplicate accession number: {current_accession}"
+                    )
+                context = self.pipeline.run_study(study)
+                self.pipeline.update_dataset_task(study, context)
+                accession_dir = self.writer.write_study(staging, context)
+                self.validator.validate_study(accession_dir, study)
+                accessions.add(current_accession)
+                del context, study
+
+            current_accession = None
+            duplicates = self.pipeline.finalize_dataset_task()
+            duplicate_path = self.writer.write_duplicates(
+                staging,
+                accessions,
                 duplicates,
             )
-            self.validator.validate(staging, dataset)
+            self.validator.validate_duplicates(duplicate_path, accessions)
+            self.validator.validate_final_layout(staging, accessions)
             output_dir = self.writer.publish(staging, job.evaluation_id)
             staging = None
             duration_ms = round((time.perf_counter() - started) * 1000)
@@ -74,7 +105,7 @@ class EvaluationRunner:
                 message="evaluation_completed",
                 data_source=data_source,
                 duration_ms=duration_ms,
-                study_count=len(dataset.studies),
+                study_count=len(accessions),
                 pred_path=str(output_dir),
             )
             if send_callback:
@@ -93,7 +124,8 @@ class EvaluationRunner:
                 data_source=data_source,
                 error_type=type(exc).__name__,
                 error=str(exc),
+                accession_number=current_accession,
             )
             if staging and staging.exists():
-                shutil.rmtree(staging)
+                shutil.rmtree(staging, ignore_errors=True)
             raise

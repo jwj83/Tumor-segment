@@ -20,10 +20,23 @@ class OutputValidator:
         evaluation_dir: Path,
         dataset: CompetitionDataset,
     ) -> None:
+        expected_accessions = {study.accession_number for study in dataset.studies}
+        self.validate_final_layout(evaluation_dir, expected_accessions)
+        self.validate_duplicates(
+            evaluation_dir / "duplicate_pairs.jsonl",
+            expected_accessions,
+        )
+        for study in dataset.studies:
+            self.validate_study(evaluation_dir / study.accession_number, study)
+
+    def validate_final_layout(
+        self,
+        evaluation_dir: Path,
+        expected_accessions: set[str],
+    ) -> None:
         if not evaluation_dir.is_dir():
             self._fail(f"missing evaluation directory: {evaluation_dir}")
 
-        expected_accessions = {study.accession_number for study in dataset.studies}
         actual_accessions = {
             path.name for path in evaluation_dir.iterdir() if path.is_dir()
         }
@@ -33,14 +46,7 @@ class OutputValidator:
                 f"expected={sorted(expected_accessions)}, actual={sorted(actual_accessions)}"
             )
 
-        self._validate_duplicates(
-            evaluation_dir / "duplicate_pairs.jsonl",
-            expected_accessions,
-        )
-        for study in dataset.studies:
-            self._validate_study(evaluation_dir / study.accession_number, study)
-
-    def _validate_study(self, directory: Path, study: Any) -> None:
+    def validate_study(self, directory: Path, study: Any) -> None:
         prediction_path = directory / "prediction.json"
         payload = self._read_json(prediction_path)
         missing = PREDICTION_REQUIRED_KEYS - payload.keys()
@@ -71,7 +77,7 @@ class OutputValidator:
                 self._fail(f"mask URI references unknown series: {uri}")
             self._validate_mask(mask_path, source)
 
-    def _validate_duplicates(self, path: Path, accessions: set[str]) -> None:
+    def validate_duplicates(self, path: Path, accessions: set[str]) -> None:
         if not path.is_file():
             self._fail(f"missing {path}")
         pairs: set[tuple[str, str]] = set()

@@ -8,7 +8,7 @@
 
 - `GET /health` 与异步 `POST /call`，监听 `8000` 端口；
 - `evaluation_id` 支持字符串和数字输入；
-- NIfTI 和常规未压缩 DICOM 数据加载；
+- 按病例流式加载 NIfTI 数据；
 - `Series`、`Study`、`CompetitionDataset`、`PipelineContext`；
 - `StudyTask`、`DatasetTask` 和 Goal1～Goal5 Result；
 - Dummy Goal1～Goal5 及数据集级重复影像任务；
@@ -24,7 +24,7 @@
 ```text
 app/             HTTP 接口和 callback
 core/            配置、插件加载和 EvaluationRunner
-data/            NIfTI/DICOM Loader 与统一数据结构
+data/            NIfTI Loader 与统一数据结构
 tasks/           Task/Result 契约和 Dummy 插件
 pipeline/        PipelineContext、编排与聚合
 output/          Writer、schema 常量与 Validator
@@ -173,7 +173,10 @@ class RealGoal3Task(StudyTask[Goal3Result]):
         return Goal3Result(tumor_probability=float(probability))
 ```
 
-重复影像任务继承 `DatasetTask[DuplicateResult]`。Task 不能直接读取比赛输出目录、写 `prediction.json` 或调用 callback。
+重复影像任务继承 `DatasetTask[DuplicateResult]`，通过 `reset()`、逐病例
+`update(study, context)` 和 `finalize()` 完成一次 evaluation；`update()` 只应保留
+embedding、哈希等轻量特征。Task 不能直接读取比赛输出目录、写
+`prediction.json` 或调用 callback。
 
 ### 2. 构建真实 Pipeline
 
@@ -220,14 +223,14 @@ export COMPETITION_PIPELINE_FACTORY='tasks.real_pipeline:build_pipeline'
 - `COMPETITION_CALLBACK_URL`：平台提供的完整 callback URL；
 - `COMPETITION_CALLBACK_TIMEOUT`：单次 callback 超时，默认 10 秒；
 - `COMPETITION_CALLBACK_ATTEMPTS`：callback 尝试次数，默认 3；
-- `COMPETITION_MAX_WORKERS`：后台 evaluation 数，默认 1；
+- `COMPETITION_MAX_WORKERS`：后台队列 worker 数，默认 1；共享 Pipeline 的推理会串行执行；
 - `COMPETITION_PIPELINE_FACTORY`：可选真实插件工厂，格式为 `module:function`。
 
 示例见 `configs/competition.env.example`。
 
 ## 当前规范解释
 
-- 同时支持 NIfTI 和 DICOM；若目录内存在 NIfTI，优先按 NIfTI 加载；
+- 官方输入仅支持 NIfTI（.nii/.nii.gz）；
 - 核心区写入其来源 T1 增强 Series UID 目录；周围区写入其 Flair/T2 Series UID 目录；
 - `SegmentationMaskURI` 相对于病例目录，格式为 `./{SeriesUid}/{SeriesUid}.nii.gz`；
 - 所有病例均输出 `IsNotHumanBodyProb` 和 `IsStitchedProb`；
@@ -239,8 +242,6 @@ export COMPETITION_PIPELINE_FACTORY='tasks.real_pipeline:build_pipeline'
 
 ## 已知边界
 
-- DICOM Loader 支持 pydicom 能直接解码的传输语法。若正式数据使用压缩 DICOM，应按实际编码增加组委会允许的 pixel-data 解码器；
-- DICOM 到 NIfTI 的 affine 按标准 DICOM LPS 到 NIfTI RAS 转换生成；正式提交前仍需用平台真实样例与评分脚本核对方向约定；
 - 当前任务状态保存在单进程内存中；平台若明确要求容器重启后恢复运行，再增加持久化；
 - callback 失败会有限重试并保留已经校验的结果，但没有持久化重试队列；
 - Goal4 英文枚举仍以现有比赛示例为基线，正式提交前必须按评分脚本确认。
