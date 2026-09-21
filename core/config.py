@@ -1,3 +1,4 @@
+# 系统配置模块：从环境变量构建评测路径、回调和并发设置。
 from __future__ import annotations
 
 import os

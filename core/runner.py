@@ -1,3 +1,4 @@
+# 评测执行器：串联数据加载、推理、输出校验、发布、日志和回调。
 from __future__ import annotations
 
 import shutil

@@ -1,3 +1,4 @@
+# 竞赛回调客户端：将评测成功结果通过 HTTP POST 重试上报。
 from __future__ import annotations
 
 import json
@@ -56,4 +57,3 @@ class CompetitionCallback:
                 if attempt + 1 < self.attempts:
                     time.sleep(2**attempt)
         raise OSError(f"callback failed after {self.attempts} attempts: {last_error}")
-

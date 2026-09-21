@@ -1,3 +1,4 @@
+# 检查级基线任务：为赛题 1—5 生成格式合规的占位预测和空分割。
 from __future__ import annotations
 
 import numpy as np
@@ -116,4 +117,3 @@ def _select_series(series: tuple[Series, ...], hints: tuple[str, ...]) -> Series
             if hint in description:
                 return item
     return series[0]
-

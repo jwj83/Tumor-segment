@@ -1,3 +1,4 @@
+# 流式处理测试：覆盖影像选择、序列元数据、逐检查加载校验和失败清理。
 from __future__ import annotations
 
 import json

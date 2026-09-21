@@ -1,3 +1,4 @@
+# 异常定义模块：统一描述请求、输入、推理和输出校验错误。
 class CompetitionError(Exception):
     """Base class for expected pipeline failures."""
 
@@ -24,4 +25,3 @@ class InvalidTaskResultError(CompetitionError):
 
 class OutputValidationError(CompetitionError):
     pass
-

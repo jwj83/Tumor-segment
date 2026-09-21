@@ -1,3 +1,4 @@
+# 数据集级基线任务：以增量方式生成重复病例配对结果。
 from __future__ import annotations
 
 from data.structures import Study

@@ -1,3 +1,4 @@
+# 推理流水线：依次运行检查级任务和数据集级重复病例任务，并校验结果。
 from __future__ import annotations
 
 import math

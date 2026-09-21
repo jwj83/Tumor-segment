@@ -1,3 +1,4 @@
+# 推理流水线注册模块：按配置动态加载自定义流水线工厂。
 from __future__ import annotations
 
 import importlib

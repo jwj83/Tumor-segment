@@ -1,3 +1,4 @@
+# 预测聚合器：将各赛题任务结果合并为竞赛要求的预测字典。
 from __future__ import annotations
 
 from core.exceptions import InvalidTaskResultError
@@ -88,4 +89,3 @@ class PredictionAggregator:
             "present": result.present,
             probability_key: result.probability,
         }
-

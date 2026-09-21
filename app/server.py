@@ -1,3 +1,4 @@
+# FastAPI 服务入口：校验评测请求并异步调度推理任务。
 from __future__ import annotations
 
 import threading

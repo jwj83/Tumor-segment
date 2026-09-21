@@ -1,3 +1,4 @@
+# 任务契约测试：确认基线流水线填充全部赛题结果和重复病例结果。
 from __future__ import annotations
 
 import unittest
@@ -35,4 +36,3 @@ class ContractTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

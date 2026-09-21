@@ -1,3 +1,4 @@
+# 任务抽象接口：规定检查级任务和数据集级任务的生命周期。
 from __future__ import annotations
 
 from abc import ABC, abstractmethod

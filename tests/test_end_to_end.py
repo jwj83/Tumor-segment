@@ -1,3 +1,4 @@
+# 端到端测试：验证完整评测输出以及非法分割掩码的拒绝逻辑。
 from __future__ import annotations
 
 import json
@@ -93,4 +94,3 @@ class EndToEndTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

@@ -1,3 +1,4 @@
+# 输出校验器：检查预测 JSON、分割掩码、重复病例及目录布局。
 from __future__ import annotations
 
 import json

@@ -1,3 +1,4 @@
+# 数据结构模块：定义影像序列、检查和完整竞赛数据集模型。
 from __future__ import annotations
 
 from dataclasses import dataclass, field
@@ -66,4 +67,3 @@ class CompetitionDataset:
         accessions = [study.accession_number for study in self.studies]
         if len(accessions) != len(set(accessions)):
             raise ValueError("dataset has duplicate accession numbers")
-

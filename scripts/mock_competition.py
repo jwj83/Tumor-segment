@@ -1,3 +1,4 @@
+# 竞赛环境模拟脚本：生成示例数据、启动服务并验证调用与回调流程。
 from __future__ import annotations
 
 import argparse
@@ -154,4 +155,3 @@ def _post_json(url: str, payload: dict[str, object]) -> dict[str, object]:
 
 if __name__ == "__main__":
     main()
-

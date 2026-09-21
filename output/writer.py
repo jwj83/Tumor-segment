@@ -1,3 +1,4 @@
+# 输出写入器：生成暂存预测文件、分割掩码和重复病例结果并原子发布。
 from __future__ import annotations
 
 import json

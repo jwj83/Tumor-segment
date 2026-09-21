@@ -1,3 +1,4 @@
+# 竞赛数据加载器：解析 NIfTI 影像与序列元数据，并按检查号流式生成检查对象。
 from __future__ import annotations
 
 import json

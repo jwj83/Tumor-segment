@@ -1,3 +1,4 @@
+# 本地评测命令：读取指定数据集并运行完整推理流程。
 from __future__ import annotations
 
 import argparse
@@ -36,4 +37,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
