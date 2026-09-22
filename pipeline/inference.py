@@ -40,6 +40,7 @@ class InferencePipeline:
             StudyTaskBinding("goal4", DummyGoal4Task()),
         )
         self.duplicate_task = duplicate_task or DummyDuplicateTask()
+        #在这调用task的load_model()
         for binding in self.study_tasks:
             binding.task.load_model()
         self.duplicate_task.load_model()
