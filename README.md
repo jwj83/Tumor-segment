@@ -242,6 +242,84 @@ export COMPETITION_PIPELINE_FACTORY='tasks.real_pipeline:build_pipeline'
 
 组委会确认正式 JSON Schema、枚举或 URI 后，只需更新聚合器、映射和 Validator，不需要修改模型接口。
 
+## 本地 Goal4/Goal5 冒烟基线
+
+仓库附带一个不依赖 PyTorch 的本地基线，用于先验证十个 BraTS 风格病例能否走完整个比赛链路。它不是医学模型，也不代表最终得分：
+
+```bash
+PYTHONPATH=. python -m scripts.generate_brats_mock \
+  --output ../outputs/synthetic_brats_10 \
+  --studies 10 \
+  --overwrite
+
+COMPETITION_PIPELINE_FACTORY=tasks.mock_pipeline:build_pipeline \
+PYTHONPATH=. python -m scripts.local_eval \
+  --dataset ../outputs/synthetic_brats_10 \
+  --output ../outputs/local_answer \
+  --evaluation-id mock-001
+```
+
+`tasks/goal4/smoke.py` 和 `tasks/goal5/smoke.py` 是本地启发式 smoke 实现；正式 Task 在对应目录的 `task.py`。smoke 实现用图像统计量生成合法的结构化分类和二值掩膜，目的是检查 `prediction.json`、掩膜 shape/affine、输出目录和 Validator。正式 Task 和 smoke Task 都遵守相同的生命周期：
+
+```python
+def load_model(self) -> None:
+    # 服务启动时调用一次；正式版本在这里加载 checkpoint
+    ...
+
+def predict(self, context: PipelineContext) -> Goal4Result | Goal5Result:
+    # 每个病例调用一次；只返回冻结的 Result，不写输出目录
+    ...
+```
+
+本地启发式 pipeline 支持提前检查权重路径：
+
+```bash
+GOAL4_WEIGHTS=/models/goal4.pt \
+GOAL5_WEIGHTS=/models/goal5.pt \
+COMPETITION_PIPELINE_FACTORY=tasks.mock_pipeline:build_pipeline \
+python scripts/local_eval.py ...
+```
+
+路径存在性检查只是本地冒烟占位。正式训练版本见下面的 `tasks.torch_pipeline:build_pipeline`；它保留相同的 Result 字段和 `load_model/predict` 边界。Goal5 的两张 mask 必须恢复到各自原始序列网格，shape 和 affine 完全一致，体素值只能是 0/1。
+
+## 可训练的 Goal3/Goal4/Goal5 基线
+
+真正的可训练版本按团队约定放在各自目录：`tasks/goal3/model.py` + `tasks/goal3/task.py`、`tasks/goal4/model.py` + `tasks/goal4/task.py`、`tasks/goal5/model.py` + `tasks/goal5/task.py`。对应的比赛工厂是 `tasks.torch_pipeline:build_pipeline`。Goal3 是病例级二分类，Goal4 是多头结构化分类，Goal5 是双通道三维分割。三者都实现了同一套生命周期：服务启动时 `load_model()`，每个病例调用 `predict(context)`。
+
+安装训练依赖并训练合成数据：
+
+```bash
+python -m pip install -r requirements-train.txt
+PYTHONPATH=. python -m scripts.train_baseline \
+  --task all \
+  --dataset ../outputs/synthetic_brats_10 \
+  --output-dir ../outputs/checkpoints \
+  --epochs 5
+```
+
+赛事材料没有固定 PyTorch 或 CUDA 版本。`requirements-train.txt` 的 `torch>=2.2,<3` 只是本地 baseline 的兼容范围；在云平台上应优先使用平台公共镜像中已经安装的 PyTorch/CUDA 组合，先运行 `python -c "import torch; print(torch.__version__, torch.version.cuda)"`，不要盲目覆盖平台环境。
+
+训练完成后用生成的 checkpoint 接到比赛推理链路：
+
+```bash
+GOAL3_CHECKPOINT=../outputs/checkpoints/goal3.pt \
+GOAL4_CHECKPOINT=../outputs/checkpoints/goal4.pt \
+GOAL5_CHECKPOINT=../outputs/checkpoints/goal5.pt \
+COMPETITION_PIPELINE_FACTORY=tasks.torch_pipeline:build_pipeline \
+PYTHONPATH=. python -m scripts.local_eval \
+  --dataset ../outputs/synthetic_brats_10 \
+  --output ../outputs/torch_answer \
+  --evaluation-id torch-001
+```
+
+如果不设置 checkpoint 路径，三个 Task 会使用随机初始化模型，仍会输出格式合法的结果；这正是今晚验证“能输入、能推理、能写出、能校验”的方式。正式容器默认从 `/2026aicompetition/workspace/checkpoint/goal3.pt`、`goal4.pt`、`goal5.pt` 读取；明天把训练好的权重放入这个目录即可，Task 和比赛框架不需要再改。
+
+构建包含 PyTorch 的推理镜像时使用允许的 PyTorch/CUDA 基础镜像，并加上 `--build-arg INSTALL_TORCH=1`；只跑 Dummy/NumPy 冒烟时保持默认值即可：
+
+```bash
+docker build --build-arg BASE_IMAGE=<approved-pytorch-base> --build-arg INSTALL_TORCH=1 -t glioma-inference .
+```
+
 ## 已知边界
 
 - 当前任务状态保存在单进程内存中；平台若明确要求容器重启后恢复运行，再增加持久化；
