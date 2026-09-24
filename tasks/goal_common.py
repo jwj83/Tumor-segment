@@ -48,7 +48,7 @@ class _TorchTask:
         self.model = model
 
     def _input(self, context: PipelineContext) -> torch.Tensor:
-        arrays = []
+        tensors = []
         for modality in INPUT_MODALITIES:
             series = _select_series(context.study.series, (modality,))
             values = np.asarray(series.image, dtype=np.float32)
@@ -59,9 +59,21 @@ class _TorchTask:
                 values = np.nan_to_num(values, copy=True)
                 lo, hi = np.percentile(values[finite], (1.0, 99.0))
                 values = np.clip((values - lo) / max(float(hi - lo), 1e-6), 0.0, 1.0)
-            arrays.append(np.asarray(values, dtype=np.float32))
-        tensor = torch.from_numpy(np.stack(arrays, axis=0).astype(np.float32, copy=False)).unsqueeze(0).to(self.device)
-        return F.interpolate(tensor, size=self.input_shape, mode="trilinear", align_corners=False)
+            # Real studies may store modalities on different voxel grids. Resize
+            # each volume before concatenating channels; np.stack requires equal
+            # shapes and would otherwise raise "all input arrays must have the
+            # same shape" on valid multi-sequence input.
+            tensor = torch.from_numpy(
+                np.asarray(values, dtype=np.float32)
+            )[None, None].to(self.device)
+            tensor = F.interpolate(
+                tensor,
+                size=self.input_shape,
+                mode="trilinear",
+                align_corners=False,
+            )
+            tensors.append(tensor)
+        return torch.cat(tensors, dim=1)
 
 
 def _goal4_result(outputs: dict[str, torch.Tensor]) -> Goal4Result:
