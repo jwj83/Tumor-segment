@@ -437,6 +437,8 @@ def deduplicate_one_to_one(
     return source, {
         "raw_rows": int(len(df)),
         "exact_dedup_rows": int(len(df.drop_duplicates())),
+        "missing_accession_rows": int(df["_accession"].eq("").sum()) if "_accession" in df else None,
+        "missing_series_uid_rows": int(df["_series_uid"].eq("").sum()) if "_series_uid" in df else None,
         "missing_key_rows": missing_key,
         "duplicate_key_count": duplicate_keys,
         "unique_key_rows": int(len(source)),
@@ -607,6 +609,12 @@ def main() -> None:
         "exact_dedup_rows": int(len(roi)),
         "missing_accession_rows": int(roi["_accession"].eq("").sum()),
         "missing_series_uid_rows": int(roi["_series_uid"].eq("").sum()),
+        "missing_uid_rows_with_roi_name": int(
+            (roi["_series_uid"].eq("") & roi.get("roi_name", pd.Series("", index=roi.index)).ne("")).sum()
+        ),
+        "missing_uid_rows_without_roi_name": int(
+            (roi["_series_uid"].eq("") & roi.get("roi_name", pd.Series("", index=roi.index)).eq("")).sum()
+        ),
         "unique_key_rows": int(roi.loc[roi["_key"].ne(""), "_key"].nunique()),
     }
 
@@ -681,6 +689,22 @@ def main() -> None:
     base_keys = set(base["_key"]) - {""}
     seq_keys = set(seq["_key"]) - {""}
     roi_keys = set(roi.loc[roi["_key"].ne(""), "_key"])
+    valid_seq_rows = seq[seq["_key"].ne("")]
+    valid_roi_rows = roi[roi["_key"].ne("")]
+    check_accessions = set(check.loc[check["_accession"].ne(""), "_accession"])
+    sample_index = base[["_accession", "_series_uid", "_key", "SeriesType"]].copy()
+    sample_index["has_check_label"] = sample_index["_accession"].isin(check_accessions)
+    sample_index["has_series_label"] = sample_index["_key"].isin(seq_keys)
+    sample_index["has_roi_label"] = sample_index["_key"].isin(roi_keys)
+    sample_index["sequence_label_status"] = sample_index["has_series_label"].map(
+        {True: "matched", False: "missing_in_annotation"}
+    )
+    sample_index["roi_label_status"] = sample_index["has_roi_label"].map(
+        {True: "matched", False: "missing_in_annotation"}
+    )
+    sample_index_public = public_keys(sample_index)
+    sample_index_public.to_csv(out_dir / "sample_index.csv", index=False, encoding="utf-8-sig")
+    write_json(out_dir / "sample_index.json", records_json(sample_index_public))
     unmatched = []
     for kind, keys in [("series", seq_keys - base_keys), ("roi", roi_keys - base_keys), ("base_without_series", base_keys - seq_keys)]:
         unmatched.extend({"kind": kind, "key": key} for key in sorted(keys))
@@ -703,6 +727,13 @@ def main() -> None:
             "series_not_in_base": len(seq_keys - base_keys),
             "roi_not_in_base": len(roi_keys - base_keys),
             "check_accessions": int(check["_accession"].ne("").sum()),
+            "base_with_check": int(sample_index["has_check_label"].sum()),
+            "base_with_series_label": int(sample_index["has_series_label"].sum()),
+            "base_with_roi_label": int(sample_index["has_roi_label"].sum()),
+            "sequence_annotation_rows_with_valid_key": int(len(valid_seq_rows)),
+            "sequence_annotation_rows_matching_base": int(valid_seq_rows["_key"].isin(base_keys).sum()),
+            "roi_annotation_rows_with_valid_key": int(len(valid_roi_rows)),
+            "roi_annotation_rows_matching_base": int(valid_roi_rows["_key"].isin(base_keys).sum()),
             "check_keys": int(check.loc[check["_key"].ne(""), "_key"].nunique()) if args.strict_pair_key else None,
             "check_not_in_base": len(set(check.loc[check["_key"].ne(""), "_key"]) - base_keys) if args.strict_pair_key else None,
             "base_without_check": len(base_keys - set(check.loc[check["_key"].ne(""), "_key"])) if args.strict_pair_key else None,
