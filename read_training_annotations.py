@@ -692,8 +692,13 @@ def main() -> None:
     valid_seq_rows = seq[seq["_key"].ne("")]
     valid_roi_rows = roi[roi["_key"].ne("")]
     check_accessions = set(check.loc[check["_accession"].ne(""), "_accession"])
+    check_keys = set(check.loc[check["_key"].ne(""), "_key"]) if args.strict_pair_key else set()
     sample_index = base[["_accession", "_series_uid", "_key", "SeriesType"]].copy()
-    sample_index["has_check_label"] = sample_index["_accession"].isin(check_accessions)
+    sample_index["has_check_label"] = (
+        sample_index["_key"].isin(check_keys)
+        if args.strict_pair_key
+        else sample_index["_accession"].isin(check_accessions)
+    )
     sample_index["has_series_label"] = sample_index["_key"].isin(seq_keys)
     sample_index["has_roi_label"] = sample_index["_key"].isin(roi_keys)
     sample_index["sequence_label_status"] = sample_index["has_series_label"].map(
@@ -734,9 +739,9 @@ def main() -> None:
             "sequence_annotation_rows_matching_base": int(valid_seq_rows["_key"].isin(base_keys).sum()),
             "roi_annotation_rows_with_valid_key": int(len(valid_roi_rows)),
             "roi_annotation_rows_matching_base": int(valid_roi_rows["_key"].isin(base_keys).sum()),
-            "check_keys": int(check.loc[check["_key"].ne(""), "_key"].nunique()) if args.strict_pair_key else None,
-            "check_not_in_base": len(set(check.loc[check["_key"].ne(""), "_key"]) - base_keys) if args.strict_pair_key else None,
-            "base_without_check": len(base_keys - set(check.loc[check["_key"].ne(""), "_key"])) if args.strict_pair_key else None,
+            "check_keys": len(check_keys) if args.strict_pair_key else None,
+            "check_not_in_base": len(check_keys - base_keys) if args.strict_pair_key else None,
+            "base_without_check": len(base_keys - check_keys) if args.strict_pair_key else None,
         },
         "join_mode": "strict_pair_key" if args.strict_pair_key else "check_by_accession_series_by_pair",
         "duplicate_conflict_count": len(conflicts),
