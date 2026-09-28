@@ -3,3 +3,5 @@
 # for the local trainable smoke baseline; in the platform container prefer the
 # preinstalled approved PyTorch/CUDA combination.
 torch>=2.2,<3
+pandas>=2.2,<3
+# nnunetv2>=2.5  # install when training the nnUNet segmentation targets

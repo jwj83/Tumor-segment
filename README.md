@@ -1,5 +1,45 @@
 # 赛道四自建模型组推理系统
 
+## 训练仓库入口
+
+本仓库用于训练和数据准备；比赛推理框架在
+`nenudcs/Glioma_recognition`。训练数据先按 Excel 和文件目录生成索引：
+
+```bash
+python scripts/read_training_annotations.py \
+  --series-type /2026aicompetition/datasets/training/annotation/SeriesType.xlsx \
+  --annotation /2026aicompetition/datasets/training/annotation/脑胶质瘤标注结果-训练集.xlsx \
+  --out-dir ./readout
+python scripts/scan_training_files.py \
+  --index ./readout/sample_index.csv \
+  --data-root /2026aicompetition/datasets/training/annotation \
+  --out-dir ./file_check
+python scripts/summarize_study_modalities.py \
+  --index ./file_check/file_index.csv \
+  --out ./study_modalities.json
+```
+
+`training.study_dataset.StudyNiftiDataset` 按 `AccessionNumber` 组织样本，允许缺失
+T1/T1CE/T2/FLAIR；缺失通道零填充并返回 `modality_present`。分类训练入口：
+
+```bash
+python -m training.train_medicalnet \
+  --file-index ./file_check/file_index.csv \
+  --labels-csv ./readout/series_merged.csv \
+  --label-column check__glioma_with_label__std \
+  --output ./checkpoint/goal3_medicalnet
+```
+
+训练脚本按 `AccessionNumber` 划分 train/val/test，记录验证 loss 和 ROC-AUC，保存
+`best.pt` 并执行 early stopping。nnUNet 分割数据按检查导出为四通道 case：
+
+```bash
+python scripts/export_nnunet_dataset.py \
+  --index ./file_check/file_index.csv \
+  --labels-csv ./readout/series_merged.csv \
+  --out-dir ./nnunet_abnormal --target abnormal --link
+```
+
 本仓库实现《赛道四_自建模型组_系统架构与协作规范》的 P0 基线：可以在比赛容器中启动 HTTP 服务，异步处理整个测试集，生成并校验比赛目录，然后调用平台回调。
 
 > 当前 Goal1～Goal5 均为 **Dummy 零分基线**。它用于验证比赛协议和工程链路，不是可提交得分的真实模型。真实模型通过冻结的 Task/Result 接口逐项替换。
