@@ -19,8 +19,10 @@ python scripts/summarize_study_modalities.py \
   --out ./study_modalities.json
 ```
 
-`training.study_dataset.StudyNiftiDataset` 按 `AccessionNumber` 组织样本，允许缺失
-T1/T1CE/T2/FLAIR；缺失通道零填充并返回 `modality_present`。分类训练入口：
+`training.sequence_dataset.SequenceNiftiDataset` 按单条序列懒加载样本；同一检查的多条序列
+共享检查级标签，但 train/val/test 按 `AccessionNumber` 划分。分类训练时一个 MedicalNet
+共享处理 T1/T1CE/T2/FLAIR 等所有可用序列，验证和推理按检查号取各序列概率的最大值。
+分类训练入口：
 
 ```bash
 python -m training.train_medicalnet \
