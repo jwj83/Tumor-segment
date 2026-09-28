@@ -32,6 +32,30 @@ python -m training.train_medicalnet \
   --output ./checkpoint/goal3_medicalnet
 ```
 
+Goal4 多头训练入口：
+
+```bash
+python -m training.train_goal4 \
+  --file-index ./file_check/file_index.csv \
+  --labels-csv ./readout/series_merged.csv \
+  --output ./checkpoint/goal4_medicalnet
+```
+
+Goal5 会导出两个 nnUNet 目标：`nnunet_abnormal` 是 FLAIR/T2 周围异常区，
+`nnunet_core` 是 T1CE 核心区。三项训练和前置索引可按顺序一键启动：
+
+```bash
+chmod +x scripts/train_all.sh
+DATA_ROOT=/2026aicompetition/datasets/training/annotation \
+ANN_ROOT=/2026aicompetition/datasets/training/annotation \
+OUT_ROOT=./runs \
+scripts/train_all.sh
+```
+
+默认脚本只准备 nnUNet 数据，不自动占用 GPU 训练 nnUNet。确认 `NNUNET_RAW`、
+`NNUNET_PREPROCESSED`、`NNUNET_RESULTS` 和两个 Dataset ID 后，再设置
+`RUN_NNUNET=1` 执行 nnUNet 的规划、预处理和训练。
+
 训练脚本按 `AccessionNumber` 划分 train/val/test，记录验证 loss 和 ROC-AUC，保存
 `best.pt` 并执行 early stopping。nnUNet 分割数据按检查导出为四通道 case：
 
